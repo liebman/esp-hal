@@ -546,7 +546,7 @@ where
         R::set_in_priority(priority);
     }
 
-    fn fill_descriptors(
+    unsafe fn fill_descriptors(
         &self,
         descriptors: &mut [DmaDescriptor],
         circular: bool,
