@@ -51,7 +51,7 @@
 //! For convenience you can use the [crate::dma_buffers] macro.
 #![warn(missing_docs)]
 
-use core::{marker::PhantomData, ptr::addr_of_mut, sync::atomic::compiler_fence};
+use core::{fmt::Debug, marker::PhantomData, ptr::addr_of_mut, sync::atomic::compiler_fence};
 
 bitfield::bitfield! {
     #[doc(hidden)]
@@ -65,8 +65,19 @@ bitfield::bitfield! {
     owner, set_owner: 31;
 }
 
+impl Debug for DmaDescriptorFlags {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DmaDescriptorFlags")
+            .field("size", &self.size())
+            .field("length", &self.length())
+            .field("suc_eof", &self.suc_eof())
+            .field("owner", &self.owner())
+            .finish()
+    }
+}
+
 /// A DMA transfer descriptor.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DmaDescriptor {
     pub(crate) flags: DmaDescriptorFlags,
     pub(crate) buffer: *mut u8,
@@ -437,7 +448,7 @@ pub trait Rx: RxPrivate {}
 
 /// DMA Tx
 #[doc(hidden)]
-pub trait Tx: TxPrivate {}
+pub trait  Tx: TxPrivate {}
 
 /// Marker trait
 #[doc(hidden)]
@@ -454,6 +465,13 @@ pub trait RxPrivate: crate::private::Sealed {
         &mut self,
         circular: bool,
         peri: DmaPeripheral,
+        data: *mut u8,
+        len: usize,
+    ) -> Result<(), DmaError>;
+
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        circular: bool,
         data: *mut u8,
         len: usize,
     ) -> Result<(), DmaError>;
@@ -527,6 +545,56 @@ where
         R::set_in_priority(priority);
     }
 
+    fn fill_descriptors(&self, descriptors: &mut [DmaDescriptor], circular: bool, len: usize, data: *mut u8) where R: RegisterAccess {
+        descriptors.fill(DmaDescriptor::EMPTY);
+    
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    
+        let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
+            CHUNK_SIZE
+        } else {
+            len / 3 + len % 3
+        };
+    
+        let mut processed = 0;
+        let mut descr = 0;
+        loop {
+            let chunk_size = usize::min(max_chunk_size, len - processed);
+            let last = processed + chunk_size >= len;
+    
+            let next = if last {
+                if circular {
+                    addr_of_mut!(descriptors[0])
+                } else {
+                    core::ptr::null_mut()
+                }
+            } else {
+                addr_of_mut!(descriptors[descr + 1])
+            };
+    
+            // buffer flags
+            let dw0 = &mut descriptors[descr];
+    
+            dw0.set_suc_eof(false);
+            dw0.set_owner(Owner::Dma);
+            dw0.set_size(chunk_size); // align to 32 bits?
+            dw0.set_length(0); // hardware will fill in the received number of bytes
+    
+            // pointer to current data
+            dw0.buffer = unsafe { data.add(processed) };
+    
+            // pointer to next descriptor
+            dw0.next = next;
+    
+            if last {
+                break;
+            }
+    
+            processed += chunk_size;
+            descr += 1;
+        }
+    }
+    
     unsafe fn prepare_transfer_without_start(
         &mut self,
         descriptors: &mut [DmaDescriptor],
@@ -545,58 +613,39 @@ where
             return Err(DmaError::UnsupportedMemoryRegion);
         }
 
-        descriptors.fill(DmaDescriptor::EMPTY);
-
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-
-        let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
-            CHUNK_SIZE
-        } else {
-            len / 3 + len % 3
-        };
-
-        let mut processed = 0;
-        let mut descr = 0;
-        loop {
-            let chunk_size = usize::min(max_chunk_size, len - processed);
-            let last = processed + chunk_size >= len;
-
-            let next = if last {
-                if circular {
-                    addr_of_mut!(descriptors[0])
-                } else {
-                    core::ptr::null_mut()
-                }
-            } else {
-                addr_of_mut!(descriptors[descr + 1])
-            };
-
-            // buffer flags
-            let dw0 = &mut descriptors[descr];
-
-            dw0.set_suc_eof(false);
-            dw0.set_owner(Owner::Dma);
-            dw0.set_size(chunk_size); // align to 32 bits?
-            dw0.set_length(0); // hardware will fill in the received number of bytes
-
-            // pointer to current data
-            dw0.buffer = unsafe { data.add(processed) };
-
-            // pointer to next descriptor
-            dw0.next = next;
-
-            if last {
-                break;
-            }
-
-            processed += chunk_size;
-            descr += 1;
-        }
+        self.fill_descriptors(descriptors, circular, len, data);
 
         R::clear_in_interrupts();
         R::reset_in();
         R::set_in_descriptors(descriptors.as_ptr() as u32);
         R::set_in_peripheral(peri as u8);
+
+        Ok(())
+    }
+
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        descriptors: &mut [DmaDescriptor],
+        circular: bool,
+        data: *mut u8,
+        len: usize,
+    ) -> Result<(), DmaError> {
+        if !crate::soc::is_valid_ram_address(descriptors.as_ptr() as u32)
+            || !crate::soc::is_valid_ram_address(core::ptr::addr_of!(
+                descriptors[descriptors.len() - 1]
+            ) as u32)
+            || !crate::soc::is_valid_ram_address(data as u32)
+            || !crate::soc::is_valid_ram_address(data.add(len) as u32)
+        {
+            return Err(DmaError::UnsupportedMemoryRegion);
+        }
+
+        self.fill_descriptors(descriptors, circular, len, data);
+
+        R::clear_in_interrupts();
+        R::reset_in();
+        R::set_in_descriptors(descriptors.as_ptr() as u32);
+        R::set_mem2mem_mode();
 
         Ok(())
     }
@@ -618,6 +667,7 @@ where
     #[cfg(feature = "async")]
     fn waker() -> &'static embassy_sync::waitqueue::AtomicWaker;
 }
+
 
 // DMA receive channel
 #[non_exhaustive]
@@ -705,6 +755,33 @@ where
 
         self.rx_impl
             .prepare_transfer_without_start(self.descriptors, circular, peri, data, len)
+    }
+
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        circular: bool,
+        data: *mut u8,
+        len: usize,
+    ) -> Result<(), DmaError> {
+        if self.descriptors.len() < (len + CHUNK_SIZE - 1) / CHUNK_SIZE {
+            return Err(DmaError::OutOfDescriptors);
+        }
+
+        if self.burst_mode && (len % 4 != 0 || data as u32 % 4 != 0) {
+            return Err(DmaError::InvalidAlignment);
+        }
+
+        if circular && len <= 3 {
+            return Err(DmaError::BufferTooSmall);
+        }
+
+        self.available = 0;
+        self.read_descr_ptr = self.descriptors.as_mut_ptr();
+        self.last_seen_handled_descriptor_ptr = core::ptr::null_mut();
+        self.read_descriptor_ptr = core::ptr::null_mut();
+
+        self.rx_impl
+            .prepare_m2m_transfer_without_start(self.descriptors, circular, data, len)
     }
 
     fn start_transfer(&mut self) -> Result<(), DmaError> {
@@ -925,6 +1002,13 @@ pub trait TxPrivate: crate::private::Sealed {
         len: usize,
     ) -> Result<(), DmaError>;
 
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        circular: bool,
+        data: *const u8,
+        len: usize,
+    ) -> Result<(), DmaError>;
+
     fn start_transfer(&mut self) -> Result<(), DmaError>;
 
     fn clear_ch_out_done(&self);
@@ -975,6 +1059,60 @@ where
         R::set_out_priority(priority);
     }
 
+    fn fill_descriptors(&self, descriptors: &mut [DmaDescriptor], circular: bool, len: usize, data: *const u8) where R: RegisterAccess {
+        descriptors.fill(DmaDescriptor::EMPTY);
+    
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    
+        let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
+            CHUNK_SIZE
+        } else {
+            len / 3 + len % 3
+        };
+    
+        let mut processed = 0;
+        let mut descr = 0;
+        loop {
+            let chunk_size = usize::min(max_chunk_size, len - processed);
+            let last = processed + chunk_size >= len;
+    
+            let next = if last {
+                if circular {
+                    addr_of_mut!(descriptors[0])
+                } else {
+                    core::ptr::null_mut()
+                }
+            } else {
+                addr_of_mut!(descriptors[descr + 1])
+            };
+    
+            // buffer flags
+            let dw0 = &mut descriptors[descr];
+    
+            // The `suc_eof` bit doesn't affect the transfer itself, but signals when the
+            // hardware should trigger an interrupt request. In circular mode,
+            // we set the `suc_eof` bit for every buffer we send. We use this for
+            // I2S to track progress of a transfer by checking OUTLINK_DSCR_ADDR.
+            dw0.set_suc_eof(circular || last);
+            dw0.set_owner(Owner::Dma);
+            dw0.set_size(chunk_size); // align to 32 bits?
+            dw0.set_length(chunk_size); // the hardware will transmit this many bytes
+    
+            // pointer to current data
+            dw0.buffer = unsafe { data.cast_mut().add(processed) };
+    
+            // pointer to next descriptor
+            dw0.next = next;
+    
+            if last {
+                break;
+            }
+    
+            processed += chunk_size;
+            descr += 1;
+        }
+    }
+
     unsafe fn prepare_transfer_without_start(
         &mut self,
         descriptors: &mut [DmaDescriptor],
@@ -993,57 +1131,7 @@ where
             return Err(DmaError::UnsupportedMemoryRegion);
         }
 
-        descriptors.fill(DmaDescriptor::EMPTY);
-
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-
-        let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
-            CHUNK_SIZE
-        } else {
-            len / 3 + len % 3
-        };
-
-        let mut processed = 0;
-        let mut descr = 0;
-        loop {
-            let chunk_size = usize::min(max_chunk_size, len - processed);
-            let last = processed + chunk_size >= len;
-
-            let next = if last {
-                if circular {
-                    addr_of_mut!(descriptors[0])
-                } else {
-                    core::ptr::null_mut()
-                }
-            } else {
-                addr_of_mut!(descriptors[descr + 1])
-            };
-
-            // buffer flags
-            let dw0 = &mut descriptors[descr];
-
-            // The `suc_eof` bit doesn't affect the transfer itself, but signals when the
-            // hardware should trigger an interrupt request. In circular mode,
-            // we set the `suc_eof` bit for every buffer we send. We use this for
-            // I2S to track progress of a transfer by checking OUTLINK_DSCR_ADDR.
-            dw0.set_suc_eof(circular || last);
-            dw0.set_owner(Owner::Dma);
-            dw0.set_size(chunk_size); // align to 32 bits?
-            dw0.set_length(chunk_size); // the hardware will transmit this many bytes
-
-            // pointer to current data
-            dw0.buffer = unsafe { data.cast_mut().add(processed) };
-
-            // pointer to next descriptor
-            dw0.next = next;
-
-            if last {
-                break;
-            }
-
-            processed += chunk_size;
-            descr += 1;
-        }
+        self.fill_descriptors(descriptors, circular, len, data);
 
         R::clear_out_interrupts();
         R::reset_out();
@@ -1053,8 +1141,36 @@ where
         Ok(())
     }
 
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        descriptors: &mut [DmaDescriptor],
+        circular: bool,
+        data: *const u8,
+        len: usize,
+    ) -> Result<(), DmaError> {
+        if !crate::soc::is_valid_ram_address(descriptors.as_ptr() as u32)
+            || !crate::soc::is_valid_ram_address(core::ptr::addr_of!(
+                descriptors[descriptors.len() - 1]
+            ) as u32)
+            || !crate::soc::is_valid_ram_address(data as u32)
+            || !crate::soc::is_valid_ram_address(data.add(len) as u32)
+        {
+            return Err(DmaError::UnsupportedMemoryRegion);
+        }
+
+        self.fill_descriptors(descriptors, circular, len, data);
+
+        R::clear_out_interrupts();
+        R::reset_out();
+        R::set_out_descriptors(descriptors.as_ptr() as u32);
+
+        Ok(())
+    }
+
     fn start_transfer(&mut self) -> Result<(), DmaError> {
         R::start_out();
+
+        crate::rom::ets_delay_us(1);
 
         if R::has_out_descriptor_error() {
             Err(DmaError::DescriptorError)
@@ -1195,6 +1311,31 @@ where
 
         self.tx_impl
             .prepare_transfer_without_start(self.descriptors, circular, peri, data, len)
+    }
+
+    unsafe fn prepare_m2m_transfer_without_start(
+        &mut self,
+        circular: bool,
+        data: *const u8,
+        len: usize,
+    ) -> Result<(), DmaError> {
+        if self.descriptors.len() < (len + CHUNK_SIZE - 1) / CHUNK_SIZE {
+            return Err(DmaError::OutOfDescriptors);
+        }
+
+        if circular && len <= 3 {
+            return Err(DmaError::BufferTooSmall);
+        }
+
+        self.write_offset = 0;
+        self.available = 0;
+        self.write_descr_ptr = self.descriptors.as_mut_ptr();
+        self.last_seen_handled_descriptor_ptr = self.descriptors.as_mut_ptr();
+        self.buffer_start = data;
+        self.buffer_len = len;
+
+        self.tx_impl
+            .prepare_m2m_transfer_without_start(self.descriptors, circular, data, len)
     }
 
     fn start_transfer(&mut self) -> Result<(), DmaError> {
@@ -1402,6 +1543,8 @@ pub trait RegisterAccess: crate::private::Sealed {
     fn last_out_dscr_address() -> usize;
 
     fn set_in_burstmode(burst_mode: bool);
+    #[cfg(esp32s3)]
+    fn set_mem2mem_mode();
     fn set_in_priority(priority: DmaPriority);
     fn clear_in_interrupts();
     fn reset_in();

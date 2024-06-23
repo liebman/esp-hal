@@ -134,6 +134,7 @@ impl<const N: u8> RegisterAccess for Channel<N> {
     }
 
     fn set_out_descriptors(address: u32) {
+        debug!("set_out_descriptors to 0x{:08x}", address);
         Self::ch()
             .out_link()
             .modify(|_, w| unsafe { w.outlink_addr().bits(address) });
@@ -208,6 +209,12 @@ impl<const N: u8> RegisterAccess for Channel<N> {
                 .indscr_burst_en()
                 .bit(burst_mode)
         });
+    }
+
+    #[cfg(esp32s3)]
+    fn set_mem2mem_mode() {
+        debug!("set_mem2mem_mode");
+        Self::ch().in_conf0().modify(|_, w| w.mem_trans_en().set_bit());
     }
 
     fn set_in_priority(priority: DmaPriority) {
@@ -608,5 +615,79 @@ impl<'d> Dma<'d> {
             #[cfg(esp32s3)]
             channel4: ChannelCreator {},
         }
+    }
+}
+
+/// DMA Memory to Memory pseudo-Peripheral
+///
+/// This is a pseudo-peripheral that allows for memory to memory transfers.
+/// It is not a real peripheral, but a way to use the DMA engine for memory
+/// to memory transfers.
+pub struct Mem2Mem<'d, C, MODE>
+where
+    C: ChannelTypes,
+    MODE: crate::Mode
+{
+    channel: super::Channel<'d, C, MODE>,
+}
+
+impl<'d, C, MODE> Mem2Mem<'d, C, MODE>
+where
+    C: ChannelTypes,
+    MODE: crate::Mode
+{
+    /// Create a new Mem2Mem instance.
+    pub fn new(mut channel: super::Channel<'d, C, MODE>) -> Mem2Mem<C, MODE> {
+        channel.tx.init_channel();
+        channel.rx.init_channel();
+        Mem2Mem {
+            channel,
+        }
+    }
+
+    /// Start a memory to memory transfer.
+    pub fn start_transfer<'t, TXBUF, RXBUF>(&mut self, tx_buffer: &'t TXBUF, rx_buffer: &'t mut RXBUF) -> Result<DmaTransferRx<Self>, DmaError>
+    where
+    TXBUF: ReadBuffer<Word = u8>,
+    RXBUF: WriteBuffer<Word = u8>,
+    {
+        let (tx_ptr, tx_len) = unsafe { tx_buffer.read_buffer() };
+        let (rx_ptr, rx_len) = unsafe { rx_buffer.write_buffer() };
+        debug!("tx_ptr: {:p}, tx_len: {}", tx_ptr, tx_len);
+        debug!("rx_ptr: {:p}, rx_len: {}", rx_ptr, rx_len);
+        unsafe {
+            self.channel.tx.prepare_m2m_transfer_without_start(false, tx_ptr, tx_len)?;
+            self.channel.rx.prepare_m2m_transfer_without_start(false, rx_ptr, rx_len)?;
+        }
+        self.channel.tx.start_transfer()?;
+        self.channel.rx.start_transfer()?;
+        Ok(DmaTransferRx::new(self))
+    }
+}
+
+impl<'d, C, MODE> dma_private::DmaSupport for Mem2Mem<'d, C, MODE>
+where
+    C: ChannelTypes,
+    MODE: crate::Mode
+{
+    
+    fn peripheral_wait_dma(&mut self, _is_tx: bool, _is_rx: bool) {
+        while !self.channel.rx.is_done() || self.channel.rx.is_done() {}
+    }
+    
+    fn peripheral_dma_stop(&mut self) {
+        unreachable!("unsupported")
+    }
+}
+
+impl<'d, C, MODE> dma_private::DmaSupportRx for Mem2Mem<'d, C, MODE>
+where
+    C: ChannelTypes,
+    MODE: crate::Mode
+{
+    type RX = C::Rx<'d>;
+
+    fn rx(&mut self) -> &mut Self::RX {
+        &mut self.channel.rx
     }
 }
