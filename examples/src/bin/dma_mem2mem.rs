@@ -1,13 +1,12 @@
 //! Uses DMA to copy memory to memory.
 //!
 
-//% FEATURES: log debug
+//% FEATURES: esp-hal/log esp-hal/debug
 //% CHIPS: esp32s3
 
 #![no_std]
 #![no_main]
 
-use esp32s3 as pac;
 use esp_backtrace as _;
 use esp_hal::{
     clock::ClockControl,
@@ -68,24 +67,6 @@ fn main() -> ! {
         }
         Err(e) => {
             error!("start_transfer: Error: {:?}", e);
-            let r = unsafe { &*pac::DMA::ptr() };
-            info!("{:?}", r.ch(0).in_conf0());
-            info!("IN_INT_RAW: {:?}", r.ch(0).in_int().raw());
-            info!("{:?}", r.ch(0).in_link());
-            info!("{:?}", r.ch(0).out_conf0());
-            info!("{:?}", r.ch(0).in_pri());
-            info!("OUT_INT_RAW: {:?}", r.ch(0).out_int().raw());
-            info!("{:?}", r.ch(0).out_link());
-            info!("{:?}", r.ch(0).outfifo_status());
-            info!("{:?}", r.ch(0).out_state());
-            info!("{:?}", r.ch(0).out_eof_des_addr());
-            info!("{:?}", r.ch(0).out_eof_bfr_des_addr());
-            info!("{:?}", r.ch(0).out_dscr());
-            info!("{:?}", r.ch(0).out_dscr_bf0());
-            info!("{:?}", r.ch(0).out_dscr_bf1());
-            info!("{:?}", r.ch(0).out_pri());
-            info!("{:?}", r.extmem_reject_st());
-            info!("{:?}", r.misc_conf());
             drop(result);
             info!("TX buffer: {:p}", tx_buffer.as_ptr());
             info!("RX buffer: {:p}", rx_buffer.as_ptr());

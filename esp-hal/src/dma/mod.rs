@@ -469,6 +469,7 @@ pub trait RxPrivate: crate::private::Sealed {
         len: usize,
     ) -> Result<(), DmaError>;
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         circular: bool,
@@ -631,6 +632,7 @@ where
         Ok(())
     }
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         descriptors: &mut [DmaDescriptor],
@@ -764,6 +766,7 @@ where
             .prepare_transfer_without_start(self.descriptors, circular, peri, data, len)
     }
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         circular: bool,
@@ -1009,6 +1012,7 @@ pub trait TxPrivate: crate::private::Sealed {
         len: usize,
     ) -> Result<(), DmaError>;
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         circular: bool,
@@ -1156,6 +1160,7 @@ where
         Ok(())
     }
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         descriptors: &mut [DmaDescriptor],
@@ -1328,6 +1333,7 @@ where
             .prepare_transfer_without_start(self.descriptors, circular, peri, data, len)
     }
 
+    #[cfg(esp32s3)]
     unsafe fn prepare_m2m_transfer_without_start(
         &mut self,
         circular: bool,

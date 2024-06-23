@@ -625,6 +625,7 @@ impl<'d> Dma<'d> {
 /// This is a pseudo-peripheral that allows for memory to memory transfers.
 /// It is not a real peripheral, but a way to use the DMA engine for memory
 /// to memory transfers.
+#[cfg(esp32s3)]
 pub struct Mem2Mem<'d, C, MODE>
 where
     C: ChannelTypes,
@@ -633,6 +634,7 @@ where
     channel: super::Channel<'d, C, MODE>,
 }
 
+#[cfg(esp32s3)]
 impl<'d, C, MODE> Mem2Mem<'d, C, MODE>
 where
     C: ChannelTypes,
@@ -667,12 +669,34 @@ where
                 .rx
                 .prepare_m2m_transfer_without_start(false, rx_ptr, rx_len)?;
         }
-        self.channel.tx.start_transfer()?;
+        let result = self.channel.tx.start_transfer();
+        if result.is_err() {
+            let r = unsafe { &*esp32s3::DMA::ptr() };
+            info!("{:?}", r.ch(0).in_conf0());
+            info!("IN_INT_RAW: {:?}", r.ch(0).in_int().raw());
+            info!("{:?}", r.ch(0).in_link());
+            info!("{:?}", r.ch(0).out_conf0());
+            info!("{:?}", r.ch(0).in_pri());
+            info!("OUT_INT_RAW: {:?}", r.ch(0).out_int().raw());
+            info!("{:?}", r.ch(0).out_link());
+            info!("{:?}", r.ch(0).outfifo_status());
+            info!("{:?}", r.ch(0).out_state());
+            info!("{:?}", r.ch(0).out_eof_des_addr());
+            info!("{:?}", r.ch(0).out_eof_bfr_des_addr());
+            info!("{:?}", r.ch(0).out_dscr());
+            info!("{:?}", r.ch(0).out_dscr_bf0());
+            info!("{:?}", r.ch(0).out_dscr_bf1());
+            info!("{:?}", r.ch(0).out_pri());
+            info!("{:?}", r.extmem_reject_st());
+            info!("{:?}", r.misc_conf());
+            return Err(result.unwrap_err());
+        }
         self.channel.rx.start_transfer()?;
         Ok(DmaTransferRx::new(self))
     }
 }
 
+#[cfg(esp32s3)]
 impl<'d, C, MODE> dma_private::DmaSupport for Mem2Mem<'d, C, MODE>
 where
     C: ChannelTypes,
@@ -687,6 +711,7 @@ where
     }
 }
 
+#[cfg(esp32s3)]
 impl<'d, C, MODE> dma_private::DmaSupportRx for Mem2Mem<'d, C, MODE>
 where
     C: ChannelTypes,
