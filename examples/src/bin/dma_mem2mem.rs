@@ -7,19 +7,18 @@
 #![no_std]
 #![no_main]
 
-use esp_backtrace as _;
-use esp_hal::clock::ClockControl;
-use esp_hal::delay::Delay;
-use esp_hal::dma::Dma;
-use esp_hal::dma::DmaPriority;
-use esp_hal::dma::Mem2Mem;
-use esp_hal::dma_buffers;
-use esp_hal::peripherals::Peripherals;
-use esp_hal::prelude::*;
-use esp_hal::system::SystemControl;
 use esp32s3 as pac;
-use log::info;
-use log::error;
+use esp_backtrace as _;
+use esp_hal::{
+    clock::ClockControl,
+    delay::Delay,
+    dma::{Dma, DmaPriority, Mem2Mem},
+    dma_buffers,
+    peripherals::Peripherals,
+    prelude::*,
+    system::SystemControl,
+};
+use log::{error, info};
 
 #[entry]
 fn main() -> ! {
@@ -31,8 +30,9 @@ fn main() -> ! {
     let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
     let delay = Delay::new(&clocks);
 
-    const DATA_SIZE: usize  = 4092;
-    let (tx_buffer, mut tx_descriptors, mut rx_buffer, mut rx_descriptors) = dma_buffers!(DATA_SIZE, DATA_SIZE);
+    const DATA_SIZE: usize = 4092;
+    let (tx_buffer, mut tx_descriptors, mut rx_buffer, mut rx_descriptors) =
+        dma_buffers!(DATA_SIZE, DATA_SIZE);
 
     let dma = Dma::new(peripherals.DMA);
     let channel = dma.channel0.configure(
@@ -55,7 +55,7 @@ fn main() -> ! {
             info!("Transfer started");
             dma_wait.wait().unwrap();
             info!("Transfer completed");
-    
+
             for i in 0..core::mem::size_of_val(tx_buffer) {
                 if rx_buffer[i] != tx_buffer[i] {
                     error!(
@@ -64,11 +64,11 @@ fn main() -> ! {
                     );
                     break;
                 }
-            }    
-        },
+            }
+        }
         Err(e) => {
             error!("start_transfer: Error: {:?}", e);
-            let r = unsafe{&*pac::DMA::ptr()};
+            let r = unsafe { &*pac::DMA::ptr() };
             info!("{:?}", r.ch(0).in_conf0());
             info!("IN_INT_RAW: {:?}", r.ch(0).in_int().raw());
             info!("{:?}", r.ch(0).in_link());
@@ -89,8 +89,16 @@ fn main() -> ! {
             drop(result);
             info!("TX buffer: {:p}", tx_buffer.as_ptr());
             info!("RX buffer: {:p}", rx_buffer.as_ptr());
-            info!("TX desc: addr: {:p} {:?}", tx_descriptors.as_ptr(), &tx_descriptors);
-            info!("RX desc: addr: {:p} {:?}", rx_descriptors.as_ptr(), &rx_descriptors);
+            info!(
+                "TX desc: addr: {:p} {:?}",
+                tx_descriptors.as_ptr(),
+                &tx_descriptors
+            );
+            info!(
+                "RX desc: addr: {:p} {:?}",
+                rx_descriptors.as_ptr(),
+                &rx_descriptors
+            );
         }
     }
 

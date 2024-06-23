@@ -448,7 +448,7 @@ pub trait Rx: RxPrivate {}
 
 /// DMA Tx
 #[doc(hidden)]
-pub trait  Tx: TxPrivate {}
+pub trait Tx: TxPrivate {}
 
 /// Marker trait
 #[doc(hidden)]
@@ -545,23 +545,31 @@ where
         R::set_in_priority(priority);
     }
 
-    fn fill_descriptors(&self, descriptors: &mut [DmaDescriptor], circular: bool, len: usize, data: *mut u8) where R: RegisterAccess {
+    fn fill_descriptors(
+        &self,
+        descriptors: &mut [DmaDescriptor],
+        circular: bool,
+        len: usize,
+        data: *mut u8,
+    ) where
+        R: RegisterAccess,
+    {
         descriptors.fill(DmaDescriptor::EMPTY);
-    
+
         compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    
+
         let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
             CHUNK_SIZE
         } else {
             len / 3 + len % 3
         };
-    
+
         let mut processed = 0;
         let mut descr = 0;
         loop {
             let chunk_size = usize::min(max_chunk_size, len - processed);
             let last = processed + chunk_size >= len;
-    
+
             let next = if last {
                 if circular {
                     addr_of_mut!(descriptors[0])
@@ -571,30 +579,30 @@ where
             } else {
                 addr_of_mut!(descriptors[descr + 1])
             };
-    
+
             // buffer flags
             let dw0 = &mut descriptors[descr];
-    
+
             dw0.set_suc_eof(false);
             dw0.set_owner(Owner::Dma);
             dw0.set_size(chunk_size); // align to 32 bits?
             dw0.set_length(0); // hardware will fill in the received number of bytes
-    
+
             // pointer to current data
             dw0.buffer = unsafe { data.add(processed) };
-    
+
             // pointer to next descriptor
             dw0.next = next;
-    
+
             if last {
                 break;
             }
-    
+
             processed += chunk_size;
             descr += 1;
         }
     }
-    
+
     unsafe fn prepare_transfer_without_start(
         &mut self,
         descriptors: &mut [DmaDescriptor],
@@ -667,7 +675,6 @@ where
     #[cfg(feature = "async")]
     fn waker() -> &'static embassy_sync::waitqueue::AtomicWaker;
 }
-
 
 // DMA receive channel
 #[non_exhaustive]
@@ -1059,23 +1066,31 @@ where
         R::set_out_priority(priority);
     }
 
-    fn fill_descriptors(&self, descriptors: &mut [DmaDescriptor], circular: bool, len: usize, data: *const u8) where R: RegisterAccess {
+    fn fill_descriptors(
+        &self,
+        descriptors: &mut [DmaDescriptor],
+        circular: bool,
+        len: usize,
+        data: *const u8,
+    ) where
+        R: RegisterAccess,
+    {
         descriptors.fill(DmaDescriptor::EMPTY);
-    
+
         compiler_fence(core::sync::atomic::Ordering::SeqCst);
-    
+
         let max_chunk_size = if !circular || len > CHUNK_SIZE * 2 {
             CHUNK_SIZE
         } else {
             len / 3 + len % 3
         };
-    
+
         let mut processed = 0;
         let mut descr = 0;
         loop {
             let chunk_size = usize::min(max_chunk_size, len - processed);
             let last = processed + chunk_size >= len;
-    
+
             let next = if last {
                 if circular {
                     addr_of_mut!(descriptors[0])
@@ -1085,10 +1100,10 @@ where
             } else {
                 addr_of_mut!(descriptors[descr + 1])
             };
-    
+
             // buffer flags
             let dw0 = &mut descriptors[descr];
-    
+
             // The `suc_eof` bit doesn't affect the transfer itself, but signals when the
             // hardware should trigger an interrupt request. In circular mode,
             // we set the `suc_eof` bit for every buffer we send. We use this for
@@ -1097,17 +1112,17 @@ where
             dw0.set_owner(Owner::Dma);
             dw0.set_size(chunk_size); // align to 32 bits?
             dw0.set_length(chunk_size); // the hardware will transmit this many bytes
-    
+
             // pointer to current data
             dw0.buffer = unsafe { data.cast_mut().add(processed) };
-    
+
             // pointer to next descriptor
             dw0.next = next;
-    
+
             if last {
                 break;
             }
-    
+
             processed += chunk_size;
             descr += 1;
         }
