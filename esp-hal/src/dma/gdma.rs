@@ -671,24 +671,27 @@ where
         }
         let result = self.channel.tx.start_transfer();
         if result.is_err() {
-            let r = unsafe { &*esp32s3::DMA::ptr() };
-            info!("{:?}", r.ch(0).in_conf0());
-            info!("IN_INT_RAW: {:?}", r.ch(0).in_int().raw());
-            info!("{:?}", r.ch(0).in_link());
-            info!("{:?}", r.ch(0).out_conf0());
-            info!("{:?}", r.ch(0).in_pri());
-            info!("OUT_INT_RAW: {:?}", r.ch(0).out_int().raw());
-            info!("{:?}", r.ch(0).out_link());
-            info!("{:?}", r.ch(0).outfifo_status());
-            info!("{:?}", r.ch(0).out_state());
-            info!("{:?}", r.ch(0).out_eof_des_addr());
-            info!("{:?}", r.ch(0).out_eof_bfr_des_addr());
-            info!("{:?}", r.ch(0).out_dscr());
-            info!("{:?}", r.ch(0).out_dscr_bf0());
-            info!("{:?}", r.ch(0).out_dscr_bf1());
-            info!("{:?}", r.ch(0).out_pri());
-            info!("{:?}", r.extmem_reject_st());
-            info!("{:?}", r.misc_conf());
+            #[cfg(feature = "debug")]
+            {
+                let r = unsafe { &*esp32s3::DMA::ptr() };
+                info!("{:?}", r.ch(0).in_conf0());
+                info!("IN_INT_RAW: {:?}", r.ch(0).in_int().raw());
+                info!("{:?}", r.ch(0).in_link());
+                info!("{:?}", r.ch(0).out_conf0());
+                info!("{:?}", r.ch(0).in_pri());
+                info!("OUT_INT_RAW: {:?}", r.ch(0).out_int().raw());
+                info!("{:?}", r.ch(0).out_link());
+                info!("{:?}", r.ch(0).outfifo_status());
+                info!("{:?}", r.ch(0).out_state());
+                info!("{:?}", r.ch(0).out_eof_des_addr());
+                info!("{:?}", r.ch(0).out_eof_bfr_des_addr());
+                info!("{:?}", r.ch(0).out_dscr());
+                info!("{:?}", r.ch(0).out_dscr_bf0());
+                info!("{:?}", r.ch(0).out_dscr_bf1());
+                info!("{:?}", r.ch(0).out_pri());
+                info!("{:?}", r.extmem_reject_st());
+                info!("{:?}", r.misc_conf());
+            }
             return Err(result.unwrap_err());
         }
         self.channel.rx.start_transfer()?;
